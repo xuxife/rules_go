@@ -297,3 +297,56 @@ index 5306bcb..d110a19 100644
 		t.Fatal(err)
 	}
 }
+
+func TestToolchainExperiments(t *testing.T) {
+	origWorkspaceData, err := ioutil.ReadFile("WORKSPACE")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	i := bytes.Index(origWorkspaceData, []byte("go_rules_dependencies()"))
+	if i < 0 {
+		t.Fatal("could not find call to go_rules_dependencies()")
+	}
+
+	buf := &bytes.Buffer{}
+	buf.Write(origWorkspaceData[:i])
+	buf.WriteString(`
+load("@io_bazel_rules_go//go:deps.bzl", "go_download_sdk")
+
+go_download_sdk(
+    name = "go_sdk_experiments",
+    version = "1.23.5",
+    toolchain_experiments = ["boringcrypto"],
+)
+
+go_rules_dependencies()
+
+go_register_toolchains()
+`)
+	if err := ioutil.WriteFile("WORKSPACE", buf.Bytes(), 0666); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := ioutil.WriteFile("WORKSPACE", origWorkspaceData, 0666); err != nil {
+			t.Errorf("error restoring WORKSPACE: %v", err)
+		}
+	}()
+
+	out, err := bazel_testing.BazelOutput("query", "--output=build", "@go_sdk_experiments//:go_sdk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`toolchain_experiments = ["boringcrypto"]`)) {
+		t.Errorf("go_sdk rule does not contain toolchain_experiments. Got:\n%s", out)
+	}
+
+	// Verify the builder build action has the environment variable
+	out, err = bazel_testing.BazelOutput("aquery", "mnemonic(GoToolchainBinaryBuild, @go_sdk_experiments//:builder)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte("GOEXPERIMENT=boringcrypto")) && !bytes.Contains(out, []byte("GOEXPERIMENT: boringcrypto")) {
+		t.Errorf("GoToolchainBinaryBuild action does not contain GOEXPERIMENT=boringcrypto. Got:\n%s", out)
+	}
+}
